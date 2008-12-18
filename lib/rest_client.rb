@@ -139,7 +139,7 @@ module RestClient
 	# Internal class used to build and execute the request.
 	class Request
 		
-		attr_reader :method, :url, :payload, :headers, :user, :password
+		attr_reader :method, :url, :payload, :headers, :user, :password, :timeout
     attr_reader :response
 
 		def self.execute(args)
@@ -149,10 +149,11 @@ module RestClient
 		def initialize(args)
 			@method = args[:method] or raise ArgumentError, "must pass :method"
 			@url = args[:url] or raise ArgumentError, "must pass :url"
-			@headers = args[:headers] || {}
-			@payload = process_payload(args[:payload])
-			@user ||= args[:user]
-			@password ||= args[:password]
+			@headers  = args[:headers] || {}
+			@payload  = process_payload(args[:payload])
+			@user     = args[:user]
+			@password = args[:password]
+			@timeout  = args[:timeout]
 		end
 
 		def execute
@@ -211,6 +212,7 @@ module RestClient
       curl.headers = headers
       curl.userpwd = "#{user}:#{password}" if user
       
+      curl.connect_timeout = timeout if timeout
       curl.follow_location = true
       curl.max_redirects   = 5
       curl.enable_cookies  = true
@@ -266,7 +268,7 @@ module RestClient
 
 		def request_log(uri, headers, payload)
 			out = []
-			out << "RestClient.#{method} #{uri}"
+			out << "RestClient.#{method} #{uri.inspect}"
 			out << (payload.size > 100 ? "(#{payload.size} byte payload)".inspect : payload.inspect) if payload
 			out << headers.inspect.gsub(/^\{/, '').gsub(/\}$/, '') unless headers.empty?
 			out.join(', ')
