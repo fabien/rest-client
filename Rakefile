@@ -31,7 +31,7 @@ require 'rake/gempackagetask'
 require 'rake/rdoctask'
 require 'fileutils'
 
-version = "0.8.2"
+version = "0.8.3"
 name = "rest-client"
 
 spec = Gem::Specification.new do |s|
@@ -49,6 +49,7 @@ spec = Gem::Specification.new do |s|
 	
 	s.files = %w(Rakefile) + Dir.glob("{lib,spec}/**/*")
 	s.executables = ['restclient']
+	s.add_dependency 'curb'
 	
 	s.require_path = "lib"
 end

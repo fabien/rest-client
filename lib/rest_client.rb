@@ -3,6 +3,8 @@ require 'net/https'
 require 'zlib'
 require 'stringio'
 
+require 'curb'
+
 require File.dirname(__FILE__) + '/resource'
 require File.dirname(__FILE__) + '/request_errors'
 
@@ -43,6 +45,7 @@ require File.dirname(__FILE__) + '/request_errors'
 #   => "PUT http://rest-test.heroku.com/resource with a 7 byte payload, content type application/x-www-form-urlencoded {\"foo\"=>\"baz\"}"
 #
 module RestClient
+	
 	def self.get(url, headers={})
 		Request.execute(:method => :get,
 			:url => url,
@@ -84,13 +87,63 @@ module RestClient
 		return @@log if defined? @@log
 		nil
 	end
+	
+	class Response
+	  
+	  attr_reader :method, :code, :body
+	  
+	  def initialize(method)
+	    @method = method.to_s.upcase
+    end
+	  
+	  def code=(code)
+	    @code = code.to_i
+    end
+	  
+	  def body=(str)
+	    @body = decode(str)
+    end
+	  
+	  def size
+	    self['content-length'] ? self['content-length'].to_i : self.body.size
+    end
+	  
+	  def [](name)
+	    headers[name.downcase]
+    end
+    
+    def headers
+      @headers ||= {}
+    end
+	  
+	  def parse_header(str)
+	    if (matches = str.match(/^(\S+):(.*)/))
+		    headers[matches[1].strip.downcase] = matches[2].strip 
+	    end
+    end
+    
+    private
+    
+    def decode(str)
+			if headers['content-encoding'] == 'gzip'
+				Zlib::GzipReader.new(StringIO.new(str)).read
+			elsif headers['content-encoding'] == 'deflate'
+				Zlib::Inflate.new.inflate(str)
+			else
+				str
+			end
+		end
+	  
+  end
 
 	# Internal class used to build and execute the request.
 	class Request
+		
 		attr_reader :method, :url, :payload, :headers, :user, :password
+    attr_reader :response
 
 		def self.execute(args)
-			new(args).execute
+		  new(args).execute
 		end
 
 		def initialize(args)
@@ -98,20 +151,16 @@ module RestClient
 			@url = args[:url] or raise ArgumentError, "must pass :url"
 			@headers = args[:headers] || {}
 			@payload = process_payload(args[:payload])
-			@user = args[:user]
-			@password = args[:password]
+			@user ||= args[:user]
+			@password ||= args[:password]
 		end
 
 		def execute
-			execute_inner
+		  uri = parse_url_with_auth(url)
+		  transmit(uri, make_headers(headers), payload)
 		rescue Redirect => e
 			@url = e.url
 			execute
-		end
-
-		def execute_inner
-			uri = parse_url_with_auth(url)
-			transmit uri, net_http_request_class(method).new(uri.request_uri, make_headers(headers)), payload
 		end
 
 		def make_headers(user_headers)
@@ -121,19 +170,6 @@ module RestClient
 			end
 		end
 
-		def net_http_class
-			if RestClient.proxy
-				proxy_uri = URI.parse(RestClient.proxy)
-				Net::HTTP::Proxy(proxy_uri.host, proxy_uri.port, proxy_uri.user, proxy_uri.password)
-			else
-				Net::HTTP
-			end
-		end
-
-		def net_http_request_class(method)
-			Net::HTTP.const_get(method.to_s.capitalize)
-		end
-
 		def parse_url(url)
 			url = "http://#{url}" unless url.match(/^http/)
 			URI.parse(url)
@@ -141,15 +177,14 @@ module RestClient
 
 		def parse_url_with_auth(url)
 			uri = parse_url(url)
-			@user = uri.user if uri.user
+			@user     = uri.user     if uri.user
 			@password = uri.password if uri.password
+			uri.user, uri.password = nil, nil
 			uri
 		end
 
 		def process_payload(p=nil, parent_key=nil)
-			unless p.is_a?(Hash)
-				p
-			else
+			if p.is_a?(Hash)
 				@headers[:content_type] ||= 'application/x-www-form-urlencoded'
 				p.keys.map do |k|
 					key = parent_key ? "#{parent_key}[#{k}]" : k
@@ -160,80 +195,89 @@ module RestClient
 						"#{key}=#{value}"
 					end
 				end.join("&")
+		  else
+		    p
 			end
 		end
-
-		def transmit(uri, req, payload)
-			setup_credentials(req)
-
-			net = net_http_class.new(uri.host, uri.port)
-			net.use_ssl = uri.is_a?(URI::HTTPS)
-			net.verify_mode = OpenSSL::SSL::VERIFY_NONE
-
-			display_log request_log
-
-			net.start do |http|
-				res = http.request(req, payload || "")
-				display_log response_log(res)
-				process_result res
-			end
-		rescue EOFError
+		
+		def transmit(uri, headers, payload)
+		  @response = Response.new(method)
+		  
+		  display_log(request_log(uri, headers, payload))
+		  
+      curl = Curl::Easy.new(uri.to_s)
+      curl.on_header { |header_data| response.parse_header(header_data) }
+      
+      curl.headers = headers
+      curl.userpwd = "#{user}:#{password}" if user
+      
+      curl.follow_location = true
+      curl.max_redirects   = 5
+      curl.enable_cookies  = true
+        
+      if RestClient.proxy
+				proxy_uri = URI.parse(RestClient.proxy)
+				curl.proxypwd   = "#{proxy_uri.user}:#{proxy_uri.password}"
+				curl.proxy_url  = proxy_uri.host
+				curl.proxy_port = proxy_uri.port
+      end
+      
+      begin
+  		  case(method)
+  	    when :get     then curl.http_get
+  	    when :post    then curl.http_post(payload || '')
+  	    when :put     then curl.http_put(payload  || '')
+  	    when :delete  then curl.http_delete
+        when :head    then curl.http_head
+  	    end
+	    rescue Curl::Err::GotNothingError
+      end
+	    
+	    response.code = curl.response_code
+	    response.body = curl.body_str
+	    
+	    display_log response_log(response)
+	    
+	    process_result(response)
+		rescue Curl::Err::ReadError, Curl::Err::HTTPFailedError, Curl::Err::RecvError
 			raise RestClient::ServerBrokeConnection
-		rescue Timeout::Error
+		rescue Curl::Err::TimeoutError
 			raise RestClient::RequestTimeout
 		end
 
-		def setup_credentials(req)
-			req.basic_auth(user, password) if user
-		end
-
 		def process_result(res)
-			if %w(200 201 202).include? res.code
-				decode res['content-encoding'], res.body
-			elsif %w(301 302 303).include? res.code
-				url = res.header['Location']
-
-				if url !~ /^http/
-					uri = URI.parse(@url)
-					uri.path = "/#{url}".squeeze('/')
-					url = uri.to_s
-				end
-
-				raise Redirect, url
-			elsif res.code == "401"
-				raise Unauthorized, res
-			elsif res.code == "404"
-				raise ResourceNotFound, res
-			else
-				raise RequestFailed, res
-			end
+			if [200, 201, 202].include?(res.code)
+        res.body
+      elsif [301, 302, 303].include?(res.code) && (url = res['location'])
+        if url !~ /^http/
+          uri = URI.parse(@url)
+          uri.path = "/#{url}".squeeze('/')
+          url = uri.to_s
+        end
+        raise Redirect, url
+      elsif res.code == 401
+        raise Unauthorized, res
+      elsif res.code == 404
+        raise ResourceNotFound, res
+      else
+        raise RequestFailed, res
+      end
 		end
 
-		def decode(content_encoding, body)
-			if content_encoding == 'gzip'
-				Zlib::GzipReader.new(StringIO.new(body)).read
-			elsif content_encoding == 'deflate'
-				Zlib::Inflate.new.inflate(body)
-			else
-				body
-			end
-		end
-
-		def request_log
+		def request_log(uri, headers, payload)
 			out = []
-			out << "RestClient.#{method} #{url.inspect}"
+			out << "RestClient.#{method} #{uri}"
 			out << (payload.size > 100 ? "(#{payload.size} byte payload)".inspect : payload.inspect) if payload
 			out << headers.inspect.gsub(/^\{/, '').gsub(/\}$/, '') unless headers.empty?
 			out.join(', ')
 		end
 
 		def response_log(res)
-			"# => #{res.code} #{res.class.to_s.gsub(/^Net::HTTP/, '')} | #{(res['Content-type'] || '').gsub(/;.*$/, '')} #{res.body.size} bytes"
+			"# => #{res.code} #{res.method} | #{(res['content-type'] || '').gsub(/;.*$/, '')} #{res.size} bytes"
 		end
 
 		def display_log(msg)
 			return unless log_to = RestClient.log
-
 			if log_to == 'stdout'
 				STDOUT.puts msg
 			elsif log_to == 'stderr'
@@ -246,5 +290,6 @@ module RestClient
 		def default_headers
 			{ :accept => 'application/xml', :accept_encoding => 'gzip, deflate' }
 		end
+		
 	end
 end
