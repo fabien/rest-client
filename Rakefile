@@ -82,4 +82,3 @@ Rake::RDocTask.new do |t|
 end
 
 CLEAN.include [ 'pkg', '*.gem', '.config' ]
-
