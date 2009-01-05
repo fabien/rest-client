@@ -67,6 +67,14 @@ module RestClient
 			))
 		end
 
+    def head(additional_headers={})
+			Request.execute(options.merge(
+				:method => :head,
+				:url => url,
+				:headers => headers.merge(additional_headers)
+			))
+		end
+
 		def delete(additional_headers={})
 			Request.execute(options.merge(
 				:method => :delete,

@@ -47,30 +47,45 @@ require File.dirname(__FILE__) + '/request_errors'
 module RestClient
 	
 	def self.get(url, headers={})
-		Request.execute(:method => :get,
+		execute(:method => :get,
 			:url => url,
 			:headers => headers)
 	end
 
 	def self.post(url, payload, headers={})
-		Request.execute(:method => :post,
+		execute(:method => :post,
 			:url => url,
 			:payload => payload,
 			:headers => headers)
 	end
 
 	def self.put(url, payload, headers={})
-		Request.execute(:method => :put,
+		execute(:method => :put,
 			:url => url,
 			:payload => payload,
 			:headers => headers)
 	end
-
-	def self.delete(url, headers={})
-		Request.execute(:method => :delete,
+	
+	def self.head(url, headers={})
+		execute(:method => :head,
 			:url => url,
 			:headers => headers)
 	end
+
+	def self.delete(url, headers={})
+		execute(:method => :delete,
+			:url => url,
+			:headers => headers)
+	end
+
+  def self.execute(*args)
+    Request.execute(*args)
+  end
+
+  def self.request(url, method = :get, headers={})
+    method, headers = :get, method if method.is_a?(Hash)
+    Request.execute(true, :url => url, :method => method, :headers => headers)
+  end
 
 	class <<self
 		attr_accessor :proxy
@@ -140,20 +155,22 @@ module RestClient
 	class Request
 		
 		attr_reader :method, :url, :payload, :headers, :user, :password, :timeout
-    attr_reader :response
+    attr_reader :response, :return_response
 
-		def self.execute(args)
-		  new(args).execute
+		def self.execute(*args)
+		  new(*args).execute
 		end
 
-		def initialize(args)
-			@method = args[:method] or raise ArgumentError, "must pass :method"
-			@url = args[:url] or raise ArgumentError, "must pass :url"
-			@headers  = args[:headers] || {}
-			@payload  = process_payload(args[:payload])
-			@user     = args[:user]
-			@password = args[:password]
-			@timeout  = args[:timeout]
+		def initialize(*args)
+		  options   = args.last.is_a?(Hash) ? args.pop : {}
+		  @return_response = args.first == true # return fill Response object
+			@method   = options[:method] or raise ArgumentError, "must pass :method"
+			@url      = options[:url] or raise ArgumentError, "must pass :url"
+			@headers  = options[:headers] || {}
+			@payload  = process_payload(options[:payload])
+			@user     = options[:user]
+			@password = options[:password]
+			@timeout  = options[:timeout]
 		end
 
 		def execute
@@ -212,7 +229,7 @@ module RestClient
       curl.headers = headers
       curl.userpwd = "#{user}:#{password}" if user
       
-      curl.connect_timeout = timeout if timeout
+      curl.timeout = timeout if timeout
       curl.follow_location = true
       curl.max_redirects   = 5
       curl.enable_cookies  = true
@@ -237,10 +254,10 @@ module RestClient
 	    
 	    response.code = curl.response_code
 	    response.body = curl.body_str
-	    
+
 	    display_log response_log(response)
 	    
-	    process_result(response)
+	    return_response ? response : process_result(response)
 		rescue Curl::Err::ReadError, Curl::Err::HTTPFailedError, Curl::Err::RecvError
 			raise RestClient::ServerBrokeConnection
 		rescue Curl::Err::TimeoutError
