@@ -77,6 +77,18 @@ module RestClient
 			:url => url,
 			:headers => headers)
 	end
+	
+	def self.move(url, headers={})
+		execute(:method => :move,
+			:url => url,
+			:headers => headers)
+	end
+	
+	def self.copy(url, headers={})
+		execute(:method => :copy,
+			:url => url,
+			:headers => headers)
+	end
 
   def self.execute(*args)
     Request.execute(*args)
@@ -102,6 +114,14 @@ module RestClient
 		return @@log if defined? @@log
 		nil
 	end
+	
+	def self.default_headers=(hsh)
+	  @@default_headers = hsh
+  end
+  
+  def self.default_headers
+    @@default_headers ||= {}
+  end
 	
 	class Response
 	  
@@ -248,6 +268,7 @@ module RestClient
   	    when :put     then curl.http_put(payload  || '')
   	    when :delete  then curl.http_delete
         when :head    then curl.http_head
+        else curl.http_custom(method.to_s.upcase)
   	    end
 	    rescue Curl::Err::GotNothingError
       end
@@ -307,7 +328,7 @@ module RestClient
 		end
 
 		def default_headers
-			{ :accept => 'application/xml', :accept_encoding => 'gzip, deflate' }
+			RestClient.default_headers
 		end
 		
 	end

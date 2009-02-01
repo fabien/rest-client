@@ -82,7 +82,23 @@ module RestClient
 				:headers => headers.merge(additional_headers)
 			))
 		end
-
+		
+		def move(additional_headers={})
+			Request.execute(options.merge(
+				:method => :move,
+				:url => url,
+				:headers => headers.merge(additional_headers)
+			))
+		end
+		
+		def copy(additional_headers={})
+			Request.execute(options.merge(
+				:method => :copy,
+				:url => url,
+				:headers => headers.merge(additional_headers)
+			))
+		end
+		
 		def to_s
 			url
 		end
